@@ -1,0 +1,160 @@
+// raymail — send real mail (SMTP + STARTTLS + MIME) and a dev sink server.
+import std/fs;
+import mime;
+import smtp;
+import sink;
+
+fn usage() {
+    eprint("usage:");
+    eprint("  raymail send --to A[,B...] --from ADDR --subject S (--body TEXT | --body-file F)");
+    eprint("               [--attach FILE]... [--host H] [--port N] [--starttls]");
+    eprint("               [--user U --password P] [--timeout MS]");
+    eprint("  raymail sink [--dir DIR] [--bind H] [--port N]     (dev SMTP server -> .eml files)");
+    eprint("");
+    eprint("  defaults: host 127.0.0.1, port 2525 (sink too); sink dir ./raymail-inbox");
+}
+
+fn flag_value(av: [string], name: string) -> Option<string> {
+    var i = 0;
+    while (i + 1 < av.len()) {
+        if (av[i] == name) {
+            return Option.Some(av[i + 1]);
+        }
+        i = i + 1;
+    }
+    Option.None
+}
+
+fn flag_str(av: [string], name: string, fallback: string) -> string {
+    match (flag_value(av, name)) {
+        Option.Some(s) => s,
+        Option.None => fallback,
+    }
+}
+
+fn flag_int(av: [string], name: string, fallback: int) -> int {
+    match (flag_value(av, name)) {
+        Option.Some(s) => {
+            match (parse_int(s)) {
+                Option.Some(n) => n,
+                Option.None => fallback,
+            }
+        },
+        Option.None => fallback,
+    }
+}
+
+fn has_flag(av: [string], name: string) -> bool {
+    for a in av {
+        if (a == name) {
+            return true;
+        }
+    }
+    false
+}
+
+fn attachments_of(av: [string]) -> Result<[mime.Attachment], string> {
+    var out: [mime.Attachment] = [];
+    var i = 0;
+    while (i + 1 < av.len()) {
+        if (av[i] == "--attach") {
+            out.push(mime.load_attachment(av[i + 1])?);
+        }
+        i = i + 1;
+    }
+    Result.Ok(out)
+}
+
+fn main() -> int {
+    let av = args();
+    if (av.len() < 1 || has_flag(av, "--help") || has_flag(av, "-h")) {
+        usage();
+        return if (av.len() < 1) { 1 } else { 0 };
+    }
+    let cmd = av[0];
+    if (cmd == "send") {
+        let to_raw = flag_str(av, "--to", "");
+        let from_addr = flag_str(av, "--from", "");
+        if (to_raw == "" || from_addr == "") {
+            eprint("raymail: --to and --from are required");
+            usage();
+            return 1;
+        }
+        var to_addrs: [string] = [];
+        for part in to_raw.split(",") {
+            if (part.trim() != "") {
+                to_addrs.push(part.trim());
+            }
+        }
+        var body = flag_str(av, "--body", "");
+        match (flag_value(av, "--body-file")) {
+            Option.Some(path) => {
+                match (fs.read_file(path)) {
+                    Result.Ok(s) => {
+                        body = s;
+                    },
+                    Result.Err(e) => {
+                        eprint("raymail: " + e);
+                        return 1;
+                    },
+                }
+            },
+            Option.None => { },
+        }
+        let attach = match (attachments_of(av)) {
+            Result.Ok(a) => a,
+            Result.Err(e) => {
+                eprint("raymail: " + e);
+                return 1;
+            },
+        };
+        let m = mime.Mail {
+            from_addr: from_addr,
+            to_addrs: to_addrs,
+            subject: flag_str(av, "--subject", "(sin asunto)"),
+            body: body,
+            attachments: attach
+        };
+        let opts = smtp.SendOpts {
+            host: flag_str(av, "--host", "127.0.0.1"),
+            port: flag_int(av, "--port", 2525),
+            starttls: has_flag(av, "--starttls"),
+            user: flag_str(av, "--user", ""),
+            password: flag_str(av, "--password", ""),
+            timeout_ms: flag_int(av, "--timeout", 30000)
+        };
+        match (smtp.send_mail(opts, m)) {
+            Result.Ok(reply) => {
+                print("sent: " + reply);
+                0
+            },
+            Result.Err(e) => {
+                eprint("raymail: " + e);
+                1
+            },
+        }
+    } else if (cmd == "sink") {
+        let opts = sink.SinkOpts {
+            dir: flag_str(av, "--dir", "./raymail-inbox"),
+            bind: flag_str(av, "--bind", "127.0.0.1"),
+            port: flag_int(av, "--port", 2525)
+        };
+        match (sink.start(opts)) {
+            Result.Err(e) => {
+                eprint("raymail: " + e);
+                1
+            },
+            Result.Ok(port) => {
+                eprint("raymail sink on port " + to_string(port) + ", storing into " + opts.dir);
+                match (recv(signals())) {
+                    Option.Some(sig) => 0,
+                    Option.None => 0,
+                }
+            },
+        }
+    } else {
+        eprint("raymail: unknown command: " + cmd);
+        usage();
+        1
+    }
+}

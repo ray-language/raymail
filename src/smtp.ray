@@ -1,0 +1,141 @@
+// raymail — SMTP client: EHLO, STARTTLS (tls_upgrade — its canonical use),
+// AUTH PLAIN/LOGIN, MAIL/RCPT/DATA with dot-stuffing.
+import std/net;
+import std/base64;
+import mime;
+
+pub struct SendOpts {
+    host: string,
+    port: int,
+    starttls: bool,
+    user: string,
+    password: string,
+    timeout_ms: int,
+}
+
+struct Conn {
+    h: int,
+    buf: bytes,
+}
+
+// One SMTP reply: possibly multi-line ("250-… 250 …"); returns (code, text).
+fn read_reply(c: Conn) -> Result<(int, string), string> {
+    var text = "";
+    var code = 0;
+    var more = true;
+    while (more) {
+        let line = read_line(c)?;
+        if (line.len() < 4) {
+            return Result.Err("short SMTP reply: " + line);
+        }
+        code = match (parse_int(line.substring(0, 3))) {
+            Option.Some(n) => n,
+            Option.None => {
+                return Result.Err("bad SMTP reply: " + line);
+            },
+        };
+        text = text + line.substring(4, line.len()) + "\n";
+        if (line.substring(3, 4) != "-") {
+            more = false;
+        }
+    }
+    return Result.Ok((code, text));
+}
+
+fn read_line(c: Conn) -> Result<string, string> {
+    while (true) {
+        var i = 0;
+        while (i < c.buf.len()) {
+            if (c.buf[i] == 10) {
+                var stop = i;
+                if (stop > 0 && c.buf[stop - 1] == 13) {
+                    stop = stop - 1;
+                }
+                let line = c.buf.sub_bytes(0, stop);
+                c.buf = c.buf.sub_bytes(i + 1, c.buf.len());
+                return from_utf8(line);
+            }
+            i = i + 1;
+        }
+        let chunk = net.socket_read_bytes(c.h)?;
+        if (chunk.len() == 0) {
+            return Result.Err("server closed the connection");
+        }
+        c.buf = c.buf + chunk;
+    }
+    Result.Err("unreachable")
+}
+
+fn command(c: Conn, line: string, want: int) -> Result<string, string> {
+    net.socket_write_bytes(c.h, (line + "\r\n").to_bytes())?;
+    let (code, text) = read_reply(c)?;
+    if (code != want) {
+        return Result.Err(line.split(" ")[0] + " failed: " + to_string(code) + " " + text.trim());
+    }
+    Result.Ok(text)
+}
+
+fn ehlo(c: Conn) -> Result<string, string> {
+    command(c, "EHLO raymail.local", 250)
+}
+
+pub fn send_mail(opts: SendOpts, m: mime.Mail) -> Result<string, string> {
+    let sock = net.tcp_connect(opts.host, opts.port)?;
+    net.set_read_timeout(sock, opts.timeout_ms);
+    var c = Conn { h: sock, buf: b"" };
+    let (greet_code, greeting) = read_reply(c)?;
+    if (greet_code != 220) {
+        close(sock);
+        return Result.Err("unexpected greeting: " + to_string(greet_code));
+    }
+    var caps = ehlo(c)?;
+    if (opts.starttls) {
+        if (!caps.to_upper().contains("STARTTLS")) {
+            close(sock);
+            return Result.Err("server does not advertise STARTTLS");
+        }
+        command(c, "STARTTLS", 220)?;
+        // The upgrade wraps the SAME handle in TLS; everything after speaks
+        // through the new handle, and the session restarts with EHLO.
+        let tls = net.tls_upgrade(sock, opts.host)?;
+        c = Conn { h: tls, buf: b"" };
+        caps = ehlo(c)?;
+    }
+    if (opts.user != "") {
+        if (caps
+        .to_upper()
+        .contains("AUTH") && caps.to_upper().contains("PLAIN")) {
+            let token = base64.base64(
+                (to_string(char_nul()) + opts.user + to_string(char_nul()) + opts.password).to_bytes()
+            );
+            command(c, "AUTH PLAIN " + token, 235)?;
+        } else {
+            command(c, "AUTH LOGIN", 334)?;
+            command(c, base64.base64(opts.user.to_bytes()), 334)?;
+            command(c, base64.base64(opts.password.to_bytes()), 235)?;
+        }
+    }
+    command(c, "MAIL FROM:<" + m.from_addr + ">", 250)?;
+    for rcpt in m.to_addrs {
+        command(c, "RCPT TO:<" + rcpt + ">", 250)?;
+    }
+    command(c, "DATA", 354)?;
+    let payload = mime.dot_stuff(mime.render(m)) + ".\r\n";
+    net.socket_write_bytes(c.h, payload.to_bytes())?;
+    let (code, text) = read_reply(c)?;
+    if (code != 250) {
+        close(c.h);
+        return Result.Err("message rejected: " + to_string(code) + " " + text.trim());
+    }
+    command(c, "QUIT", 221);
+    close(c.h);
+    Result.Ok(text.trim())
+}
+
+// '\0' is not expressible as a char literal escape; build it by code point.
+fn char_nul() -> char {
+    match (char_from_code(0)) {
+        Option.Some(c) => c,
+        Option.None => ' ',
+    }
+}

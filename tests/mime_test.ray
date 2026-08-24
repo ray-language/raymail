@@ -1,0 +1,68 @@
+// MIME construction: folding, RFC 2047, base64 lines, dot-stuffing.
+import mime;
+
+@test
+fn folds_long_headers_at_78() {
+    var many = "";
+    var i = 0;
+    while (i < 12) {
+        many = many + "destinatario" + to_string(i) + "@example.com, ";
+        i = i + 1;
+    }
+    let folded = mime.fold_header("To", many.trim());
+    for line in folded.split("\r\n") {
+        assert(line.len() <= 78);
+    }
+    assert(folded.contains("\r\n "));
+    let short = mime.fold_header("Subject", "hola");
+    assert_eq(short, "Subject: hola\r\n");
+}
+
+@test
+fn non_ascii_subjects_become_encoded_words() {
+    assert_eq(mime.header_text("plain subject"), "plain subject");
+    let enc = mime.header_text("señales y ñandúes");
+    assert(enc.starts_with("=?UTF-8?B?"));
+    assert(enc.ends_with("?="));
+}
+
+@test
+fn base64_body_wraps_at_76() {
+    var data: [int] = [];
+    var i = 0;
+    while (i < 200) {
+        data.push(i);
+        i = i + 1;
+    }
+    let out = mime.base64_lines(bytes_of(data));
+    for line in out.split("\r\n") {
+        assert(line.len() <= 76);
+    }
+}
+
+@test
+fn dot_stuffing_protects_lone_dots() {
+    let stuffed = mime.dot_stuff("hola\n.\n.punto\nnormal");
+    assert(stuffed.contains("\r\n..\r\n"));
+    assert(stuffed.contains("\r\n..punto\r\n"));
+    assert(stuffed.contains("normal\r\n"));
+}
+
+@test
+fn multipart_render_carries_attachment() {
+    let m = mime.Mail {
+        from_addr: "ana@example.com",
+        to_addrs: ["luis@example.com"],
+        subject: "informe",
+        body: "va adjunto",
+        attachments: [mime.Attachment { filename: "datos.bin", content: b"\x00\x01\x02" }]
+    };
+    let msg = mime.render(m);
+    assert(msg.contains("From: ana@example.com"));
+    assert(msg.contains("multipart/mixed"));
+    assert(msg.contains("filename=\"datos.bin\""));
+    assert(msg.contains("Content-Transfer-Encoding: base64"));
+    assert(msg.contains("AAEC"));
+    // Closing boundary present.
+    assert(msg.contains("--\r\n"));
+}

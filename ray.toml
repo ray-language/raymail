@@ -1,0 +1,5 @@
+[package]
+name = "raymail"
+version = "0.1.0"
+
+[dependencies]

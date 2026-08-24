@@ -1,0 +1,102 @@
+// End-to-end: the client sends through the sink over real SMTP; the .eml
+// lands with the body, the attachment, and dot-stuffing undone.
+import std/fs;
+import std/time;
+import mime;
+import smtp;
+import sink;
+
+const DIR: string = "/tmp/raymail_e2e_inbox";
+
+const PORT: int = 19021;
+
+fn wipe() {
+    if (fs.exists(DIR)) {
+        match (fs.list_dir(DIR)) {
+            Result.Ok(names) => {
+                for f in names {
+                    fs.remove_file(DIR + "/" + f);
+                }
+            },
+            Result.Err(e) => { },
+        }
+    }
+}
+
+fn inbox() -> [string] {
+    match (fs.list_dir(DIR)) {
+        Result.Ok(names) => names,
+        Result.Err(e) => [],
+    }
+}
+
+@test
+fn smtp_end_to_end_through_the_sink() {
+    wipe();
+    match (sink.start(sink.SinkOpts { dir: DIR, bind: "127.0.0.1", port: PORT })) {
+        Result.Ok(p) => { },
+        Result.Err(e) => panic(e),
+    }
+    time.sleep(150);
+    let m = mime.Mail {
+        from_addr: "ana@example.com",
+        to_addrs: ["luis@example.com", "eva@example.com"],
+        subject: "prueba con ñ",
+        body: "primera línea\n.\n.al borde\núltima",
+        attachments: [mime.Attachment { filename: "x.bin", content: b"\xffdata" }]
+    };
+    let opts = smtp.SendOpts {
+        host: "127.0.0.1",
+        port: PORT,
+        starttls: false,
+        user: "",
+        password: "",
+        timeout_ms: 5000
+    };
+    match (smtp.send_mail(opts, m)) {
+        Result.Ok(reply) => assert(reply.contains("stored")),
+        Result.Err(e) => panic(e),
+    }
+    let files = inbox();
+    assert_eq(files.len(), 1);
+    let eml = match (fs.read_file(DIR + "/" + files[0])) {
+        Result.Ok(s) => s,
+        Result.Err(e) => panic(e),
+    };
+    assert(eml.contains("X-Sink-From: <ana@example.com>"));
+    assert(eml.contains("<luis@example.com>"));
+    assert(eml.contains("Subject: =?UTF-8?B?"));
+    // Dot-stuffing undone by the sink: the lone dot came back.
+    assert(eml.contains("\r\n.\r\n"));
+    assert(eml.contains("\r\n.al borde\r\n"));
+    assert(eml.contains("multipart/mixed"));
+    assert(eml.contains("filename=\"x.bin\""));
+
+    // Second message on a fresh connection: the sink keeps serving.
+    let m2 = mime.Mail {
+        from_addr: "ana@example.com",
+        to_addrs: ["luis@example.com"],
+        subject: "segunda",
+        body: "sin adjuntos",
+        attachments: []
+    };
+    match (smtp.send_mail(opts, m2)) {
+        Result.Ok(r) => { },
+        Result.Err(e) => panic(e),
+    }
+    assert_eq(inbox().len(), 2);
+
+    // STARTTLS against the sink is refused honestly (454) and surfaces as Err.
+    let tls_opts = smtp.SendOpts {
+        host: "127.0.0.1",
+        port: PORT,
+        starttls: true,
+        user: "",
+        password: "",
+        timeout_ms: 5000
+    };
+    match (smtp.send_mail(tls_opts, m2)) {
+        Result.Err(e) => assert(e.contains("STARTTLS")),
+        Result.Ok(r) => panic("starttls against the sink must fail"),
+    }
+}

@@ -1,0 +1,159 @@
+// raymail — the sink: a dev SMTP server (mailhog-lite) that accepts every
+// message and stores it as an .eml file. Plain SMTP only: serving STARTTLS
+// needs a certificate (tls_accept) and is out of v1.
+import std/net;
+import std/fs;
+import std/time;
+import std/crypto;
+import std/hex;
+
+pub struct SinkOpts {
+    dir: string,
+    bind: string,
+    port: int,
+}
+
+pub fn start(opts: SinkOpts) -> Result<int, string> {
+    if (!fs.exists(opts.dir)) {
+        fs.mkdir(opts.dir)?;
+    }
+    let listener = net.tcp_listen(opts.bind, opts.port)?;
+    let actual = net.local_port(listener);
+    spawn(fn() {
+        var running = true;
+        while (running) {
+            match (net.tcp_accept(listener)) {
+                Result.Err(e) => {
+                    running = false;
+                },
+                Result.Ok(h) => {
+                    spawn(fn() {
+                        serve_conn(h, opts.dir);
+                    });
+                },
+            }
+        }
+    });
+    Result.Ok(actual)
+}
+
+struct Rd {
+    h: int,
+    buf: bytes,
+}
+
+fn read_line(c: Rd) -> Result<string, string> {
+    while (true) {
+        var i = 0;
+        while (i < c.buf.len()) {
+            if (c.buf[i] == 10) {
+                var stop = i;
+                if (stop > 0 && c.buf[stop - 1] == 13) {
+                    stop = stop - 1;
+                }
+                let line = c.buf.sub_bytes(0, stop);
+                c.buf = c.buf.sub_bytes(i + 1, c.buf.len());
+                return from_utf8(line);
+            }
+            i = i + 1;
+        }
+        let chunk = net.socket_read_bytes(c.h)?;
+        if (chunk.len() == 0) {
+            return Result.Err("closed");
+        }
+        c.buf = c.buf + chunk;
+    }
+    Result.Err("unreachable")
+}
+
+fn say(c: Rd, line: string) {
+    net.socket_write_bytes(c.h, (line + "\r\n").to_bytes());
+}
+
+fn serve_conn(h: int, dir: string) {
+    net.set_read_timeout(h, 60000);
+    let c = Rd { h: h, buf: b"" };
+    say(c, "220 raymail sink ready");
+    var from_addr = "";
+    var rcpts: [string] = [];
+    var alive = true;
+    while (alive) {
+        match (read_line(
+        c
+    )) {
+            Result.Err(e) => {
+                alive = false;
+            },
+            Result.Ok(line) => {
+                let up = line.to_upper();
+                if (up.starts_with(
+                "EHLO"
+            ) || up.starts_with("HELO")) {
+                    say(c, "250-raymail-sink");
+                    say(c, "250 8BITMIME");
+                } else if (up.starts_with("MAIL FROM:")) {
+                    from_addr = line.substring(10, line.len()).trim();
+                    say(c, "250 OK");
+                } else if (up.starts_with("RCPT TO:")) {
+                    rcpts.push(line.substring(8, line.len()).trim());
+                    say(c, "250 OK");
+                } else if (up == "DATA") {
+                    say(c, "354 End data with <CR><LF>.<CR><LF>");
+                    var body = "";
+                    var reading = true;
+                    while (reading) {
+                        match (read_line(c)) {
+                            Result.Err(e) => {
+                                reading = false;
+                                alive = false;
+                            },
+                            Result.Ok(dline) => {
+                                if (dline == ".") {
+                                    reading = false;
+                                } else {
+                                    // Undo dot-stuffing.
+                                    let clean = if (dline.starts_with("..")) {
+                                        dline.substring(1, dline.len())
+                                    } else {
+                                        dline
+                                    };
+                                    body = body + clean + "\r\n";
+                                }
+                            },
+                        }
+                    }
+                    if (alive) {
+                        let name = to_string(
+                            time.now()
+                        ) + "-" + hex.hex_encode(crypto.random_bytes(4)) + ".eml";
+                        let meta = "X-Sink-From: " + from_addr + "\r\n" + "X-Sink-To: " + join(
+                            rcpts,
+                            ", "
+                        ) + "\r\n";
+                        fs.write_file(dir + "/" + name, meta + body);
+                        eprint(
+                            "sink: stored " + name + " (" + to_string(body.len()) + " B) from " + from_addr
+                        );
+                        say(c, "250 OK stored as " + name);
+                        from_addr = "";
+                        rcpts = [];
+                    }
+                } else if (up == "QUIT") {
+                    say(c, "221 bye");
+                    alive = false;
+                } else if (up == "RSET") {
+                    from_addr = "";
+                    rcpts = [];
+                    say(c, "250 OK");
+                } else if (up == "NOOP") {
+                    say(c, "250 OK");
+                } else if (up == "STARTTLS") {
+                    say(c, "454 TLS not available (sink is plaintext by design)");
+                } else {
+                    say(c, "500 unrecognized command");
+                }
+            },
+        }
+    }
+    close(h);
+}
