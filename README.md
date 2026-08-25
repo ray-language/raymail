@@ -1,6 +1,6 @@
 # raymail
 
-Cliente SMTP **de correo real** + servidor "sink" de desarrollo, escrito en [raylang](https://github.com/roberto-ayala/raylang). Es el estreno de `tls_upgrade` (STARTTLS es su caso canónico y ninguna app lo usaba): EHLO → STARTTLS → el mismo socket envuelto en TLS → EHLO de nuevo → AUTH → MAIL/RCPT/DATA con MIME completo (cabeceras plegadas RFC 5322, asuntos no-ASCII RFC 2047, multipart con adjuntos base64, dot-stuffing).
+Cliente SMTP **de correo real** + servidor "sink" de desarrollo, escrito en [raylang](https://github.com/ray-language/raylang). Es el estreno de `tls_upgrade` (STARTTLS es su caso canónico y ninguna app lo usaba): EHLO → STARTTLS → el mismo socket envuelto en TLS → EHLO de nuevo → AUTH → MAIL/RCPT/DATA con MIME completo (cabeceras plegadas RFC 5322, asuntos no-ASCII RFC 2047, multipart con adjuntos base64, dot-stuffing).
 
 ```text
 # Enviar de verdad (STARTTLS + auth)
