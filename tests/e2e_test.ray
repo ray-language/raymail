@@ -6,25 +6,8 @@ import mime;
 import smtp;
 import sink;
 
-const DIR: string = "/tmp/raymail_e2e_inbox";
-
-const PORT: int = 19021;
-
-fn wipe() {
-    if (fs.exists(DIR)) {
-        match (fs.list_dir(DIR)) {
-            Result.Ok(names) => {
-                for f in names {
-                    fs.remove_file(DIR + "/" + f);
-                }
-            },
-            Result.Err(e) => { },
-        }
-    }
-}
-
-fn inbox() -> [string] {
-    match (fs.list_dir(DIR)) {
+fn inbox(dir: string) -> [string] {
+    match (fs.list_dir(dir)) {
         Result.Ok(names) => names,
         Result.Err(e) => [],
     }
@@ -32,11 +15,15 @@ fn inbox() -> [string] {
 
 @test
 fn smtp_end_to_end_through_the_sink() {
-    wipe();
-    match (sink.start(sink.SinkOpts { dir: DIR, bind: "127.0.0.1", port: PORT })) {
-        Result.Ok(p) => { },
+    let dir = match (fs.make_temp_dir("raymail_e2e_")) {
+        Result.Ok(d) => d,
         Result.Err(e) => panic(e),
-    }
+    };
+    // Port 0: the OS picks a free port and the sink reports it.
+    let port = match (sink.start(sink.SinkOpts { dir: dir, bind: "127.0.0.1", port: 0 })) {
+        Result.Ok(p) => p,
+        Result.Err(e) => panic(e),
+    };
     time.sleep(150);
     let m = mime.Mail {
         from_addr: "ana@example.com",
@@ -47,7 +34,7 @@ fn smtp_end_to_end_through_the_sink() {
     };
     let opts = smtp.SendOpts {
         host: "127.0.0.1",
-        port: PORT,
+        port: port,
         starttls: false,
         user: "",
         password: "",
@@ -57,9 +44,9 @@ fn smtp_end_to_end_through_the_sink() {
         Result.Ok(reply) => assert(reply.contains("stored")),
         Result.Err(e) => panic(e),
     }
-    let files = inbox();
+    let files = inbox(dir);
     assert_eq(files.len(), 1);
-    let eml = match (fs.read_file(DIR + "/" + files[0])) {
+    let eml = match (fs.read_file(dir + "/" + files[0])) {
         Result.Ok(s) => s,
         Result.Err(e) => panic(e),
     };
@@ -84,12 +71,12 @@ fn smtp_end_to_end_through_the_sink() {
         Result.Ok(r) => { },
         Result.Err(e) => panic(e),
     }
-    assert_eq(inbox().len(), 2);
+    assert_eq(inbox(dir).len(), 2);
 
     // STARTTLS against the sink is refused honestly (454) and surfaces as Err.
     let tls_opts = smtp.SendOpts {
         host: "127.0.0.1",
-        port: PORT,
+        port: port,
         starttls: true,
         user: "",
         password: "",
@@ -99,4 +86,5 @@ fn smtp_end_to_end_through_the_sink() {
         Result.Err(e) => assert(e.contains("STARTTLS")),
         Result.Ok(r) => panic("starttls against the sink must fail"),
     }
+    fs.remove_all(dir);
 }

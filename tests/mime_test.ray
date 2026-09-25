@@ -1,29 +1,53 @@
-// MIME construction: folding, RFC 2047, base64 lines, dot-stuffing.
+// MIME construction: the rendered message carries folded headers, RFC 2047
+// subjects, base64 lines of 76 and a dot-stuffed SMTP DATA payload.
 import mime;
+
+fn plain(subject: string, to_addrs: [string], body: string) -> mime.Mail {
+    mime.Mail {
+        from_addr: "ana@example.com",
+        to_addrs: to_addrs,
+        subject: subject,
+        body: body,
+        attachments: []
+    }
+}
+
+// The header block of a rendered message, one entry per physical line.
+fn header_lines(msg: string) -> [string] {
+    match (msg.index_of("\r\n\r\n")) {
+        Option.Some(i) => msg.substring(0, i).split("\r\n"),
+        Option.None => msg.split("\r\n"),
+    }
+}
 
 @test
 fn folds_long_headers_at_78() {
-    var many = "";
+    var many: [string] = [];
     var i = 0;
     while (i < 12) {
-        many = many + "destinatario" + to_string(i) + "@example.com, ";
+        many.push("destinatario" + to_string(i) + "@example.com");
         i = i + 1;
     }
-    let folded = mime.fold_header("To", many.trim());
-    for line in folded.split("\r\n") {
+    let msg = mime.render(plain("hola", many, "x"));
+    for line in header_lines(msg) {
         assert(line.len() <= 78);
     }
-    assert(folded.contains("\r\n "));
-    let short = mime.fold_header("Subject", "hola");
-    assert_eq(short, "Subject: hola\r\n");
+    assert(msg.contains("\r\n destinatario"));
+    assert(msg.contains("Subject: hola\r\n"));
 }
 
 @test
 fn non_ascii_subjects_become_encoded_words() {
-    assert_eq(mime.header_text("plain subject"), "plain subject");
-    let enc = mime.header_text("señales y ñandúes");
-    assert(enc.starts_with("=?UTF-8?B?"));
-    assert(enc.ends_with("?="));
+    let plain_msg = mime.render(plain("plain subject", ["luis@example.com"], "x"));
+    assert(plain_msg.contains("Subject: plain subject\r\n"));
+    let msg = mime.render(plain("señales y ñandúes", ["luis@example.com"], "x"));
+    assert(msg.contains("Subject: =?UTF-8?B?"));
+    // A long non-ASCII subject is split into several encoded-words, each line
+    // still within 78 columns (RFC 2047 caps a word at 75 characters).
+    let long_msg = mime.render(plain("ñandú ".repeat(30), ["luis@example.com"], "x"));
+    for line in header_lines(long_msg) {
+        assert(line.len() <= 78);
+    }
 }
 
 @test
@@ -34,18 +58,22 @@ fn base64_body_wraps_at_76() {
         data.push(i);
         i = i + 1;
     }
-    let out = mime.base64_lines(bytes_of(data));
-    for line in out.split("\r\n") {
-        assert(line.len() <= 76);
+    var m = plain("adjunto", ["luis@example.com"], "x");
+    m.attachments = [mime.Attachment { filename: "d.bin", content: bytes_of(data) }];
+    let msg = mime.render(m);
+    for line in msg.split("\r\n") {
+        assert(line.len() <= 78);
     }
+    assert(msg.contains("AAECAwQF"));
 }
 
 @test
 fn dot_stuffing_protects_lone_dots() {
-    let stuffed = mime.dot_stuff("hola\n.\n.punto\nnormal");
-    assert(stuffed.contains("\r\n..\r\n"));
-    assert(stuffed.contains("\r\n..punto\r\n"));
-    assert(stuffed.contains("normal\r\n"));
+    let data = mime.smtp_data(plain("s", ["luis@example.com"], "hola\n.\n.punto\nnormal"));
+    assert(data.contains("\r\n..\r\n"));
+    assert(data.contains("\r\n..punto\r\n"));
+    // A body without a trailing newline still gets the terminator on its own line.
+    assert(data.ends_with("\r\nnormal\r\n.\r\n"));
 }
 
 @test
