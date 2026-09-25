@@ -102,9 +102,7 @@ pub fn send_mail(opts: SendOpts, m: mime.Mail) -> Result<string, string> {
         caps = ehlo(c)?;
     }
     if (opts.user != "") {
-        if (caps
-        .to_upper()
-        .contains("AUTH") && caps.to_upper().contains("PLAIN")) {
+        if (caps.to_upper().contains("AUTH") && caps.to_upper().contains("PLAIN")) {
             let token = base64.base64(
                 (to_string(char_nul()) + opts.user + to_string(char_nul()) + opts.password).to_bytes()
             );
