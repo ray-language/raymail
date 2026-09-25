@@ -78,17 +78,13 @@ fn serve_conn(h: int, dir: string) {
     var rcpts: [string] = [];
     var alive = true;
     while (alive) {
-        match (read_line(
-        c
-    )) {
+        match (read_line(c)) {
             Result.Err(e) => {
                 alive = false;
             },
             Result.Ok(line) => {
                 let up = line.to_upper();
-                if (up.starts_with(
-                "EHLO"
-            ) || up.starts_with("HELO")) {
+                if (up.starts_with("EHLO") || up.starts_with("HELO")) {
                     say(c, "250-raymail-sink");
                     say(c, "250 8BITMIME");
                 } else if (up.starts_with("MAIL FROM:")) {
@@ -123,16 +119,24 @@ fn serve_conn(h: int, dir: string) {
                         }
                     }
                     if (alive) {
-                        let name = to_string(
-                            time.now()
-                        ) + "-" + hex.hex_encode(crypto.random_bytes(4)) + ".eml";
-                        let meta = "X-Sink-From: " + from_addr + "\r\n" + "X-Sink-To: " + join(
-                            rcpts,
-                            ", "
-                        ) + "\r\n";
+                        let name = to_string(time.now())
+                            + "-"
+                            + hex.hex_encode(crypto.random_bytes(4))
+                            + ".eml";
+                        let meta = "X-Sink-From: "
+                            + from_addr
+                            + "\r\n"
+                            + "X-Sink-To: "
+                            + join(rcpts, ", ")
+                            + "\r\n";
                         fs.write_file(dir + "/" + name, meta + body);
                         eprint(
-                            "sink: stored " + name + " (" + to_string(body.len()) + " B) from " + from_addr
+                            "sink: stored "
+                                + name
+                                + " ("
+                                + to_string(body.len())
+                                + " B) from "
+                                + from_addr
                         );
                         say(c, "250 OK stored as " + name);
                         from_addr = "";
