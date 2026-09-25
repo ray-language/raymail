@@ -1,11 +1,12 @@
-// raymail — MIME message construction: folded headers, multipart bodies,
-// base64 attachments, dot-stuffing. The strict-rules text generation the
-// catalog wanted to stress.
+// raymail — MIME message construction: multipart bodies and base64
+// attachments. The strict-rules encodings (RFC 2047 encoded-words, header
+// folding at 78, base64 at 76, dot-stuffing) come from net/mail, which grew
+// out of this app's hand-rolled versions.
 import std/fs;
 import std/time;
-import std/base64;
 import std/crypto;
 import std/hex;
+import net/mail;
 
 pub struct Attachment {
     filename: string,
@@ -18,70 +19,6 @@ pub struct Mail {
     subject: string,
     body: string,
     attachments: [Attachment],
-}
-
-// RFC 5322 header folding: continuation lines start with a space, and no line
-// exceeds 78 chars. Folding splits on spaces only (good enough for address
-// lists and subjects).
-pub fn fold_header(name: string, value: string) -> string {
-    let full = name + ": " + value;
-    if (full.len() <= 78) {
-        return full + "\r\n";
-    }
-    var out = "";
-    var line = name + ":";
-    for word in value.split(" ") {
-        if (line.len() + 1 + word.len() > 78 && line != name + ":") {
-            out = out + line + "\r\n";
-            line = " " + word;
-        } else {
-            line = line + " " + word;
-        }
-    }
-    out + line + "\r\n"
-}
-
-// RFC 2047 encoded-word for non-ASCII header text (UTF-8 + base64).
-pub fn header_text(s: string) -> string {
-    var ascii = true;
-    for c in s.chars() {
-        if (c as int > 126 || c as int < 32) {
-            ascii = false;
-        }
-    }
-    if (ascii) {
-        return s;
-    }
-    "=?UTF-8?B?" + base64.base64(s.to_bytes()) + "?="
-}
-
-// Base64 in 76-char lines (RFC 2045 body encoding).
-pub fn base64_lines(data: bytes) -> string {
-    let all = base64.base64(data);
-    var out = "";
-    var i = 0;
-    while (i < all.len()) {
-        let end = if (i + 76 > all.len()) { all.len() } else { i + 76 };
-        out = out + all.substring(i, end) + "\r\n";
-        i = end;
-    }
-    out
-}
-
-// SMTP DATA dot-stuffing: a body line starting with '.' gets one prepended.
-pub fn dot_stuff(body: string) -> string {
-    var out = "";
-    for line in body.split("\n") {
-        var l = line;
-        if (l.ends_with("\r")) {
-            l = l.substring(0, l.len() - 1);
-        }
-        if (l.starts_with(".")) {
-            l = "." + l;
-        }
-        out = out + l + "\r\n";
-    }
-    out
 }
 
 fn boundary() -> string {
@@ -100,23 +37,23 @@ fn domain_of(addr: string) -> string {
 }
 
 // The full RFC 5322 message (headers + body), WITHOUT dot-stuffing (that is
-// applied at SMTP DATA time).
+// applied at SMTP DATA time, see `smtp_data`).
 pub fn render(m: Mail) -> string {
     var out = "";
-    out = out + fold_header("From", m.from_addr);
-    out = out + fold_header("To", join(m.to_addrs, ", "));
-    out = out + fold_header("Subject", header_text(m.subject));
-    out = out + fold_header("Date", time.to_rfc1123(time.now_utc()));
-    out = out + fold_header("Message-ID", message_id(domain_of(m.from_addr)));
-    out = out + fold_header("MIME-Version", "1.0");
+    out = out + mail.header("From", m.from_addr);
+    out = out + mail.header("To", join(m.to_addrs, ", "));
+    out = out + mail.header("Subject", m.subject);
+    out = out + mail.header("Date", time.to_rfc1123(time.now_utc()));
+    out = out + mail.header("Message-ID", message_id(domain_of(m.from_addr)));
+    out = out + mail.header("MIME-Version", "1.0");
     if (m.attachments.len() == 0) {
-        out = out + fold_header("Content-Type", "text/plain; charset=utf-8");
-        out = out + fold_header("Content-Transfer-Encoding", "8bit");
+        out = out + mail.header("Content-Type", "text/plain; charset=utf-8");
+        out = out + mail.header("Content-Transfer-Encoding", "8bit");
         out = out + "\r\n" + m.body;
         return out;
     }
     let b = boundary();
-    out = out + fold_header("Content-Type", "multipart/mixed; boundary=\"" + b + "\"");
+    out = out + mail.header("Content-Type", "multipart/mixed; boundary=\"" + b + "\"");
     out = out + "\r\n";
     out = out + "--" + b + "\r\n";
     out = out + "Content-Type: text/plain; charset=utf-8\r\n";
@@ -127,9 +64,19 @@ pub fn render(m: Mail) -> string {
         out = out + "Content-Type: application/octet-stream; name=\"" + a.filename + "\"\r\n";
         out = out + "Content-Transfer-Encoding: base64\r\n";
         out = out + "Content-Disposition: attachment; filename=\"" + a.filename + "\"\r\n\r\n";
-        out = out + base64_lines(a.content);
+        out = out + mail.base64_body(a.content);
     }
     out + "--" + b + "--\r\n"
+}
+
+// The SMTP DATA payload: the rendered message dot-stuffed (CRLF line endings),
+// always ending in CRLF so the ".\r\n" terminator sits on its own line.
+pub fn smtp_data(m: Mail) -> string {
+    var data = mail.dot_stuff(render(m));
+    if (!data.ends_with("\r\n")) {
+        data = data + "\r\n";
+    }
+    data + ".\r\n"
 }
 
 pub fn load_attachment(path: string) -> Result<Attachment, string> {

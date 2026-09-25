@@ -26,8 +26,11 @@ de la sesión TLS. El upgrade in-place del handle funciona.
   honesto si el servidor no lo anuncia), AUTH PLAIN (o LOGIN como fallback),
   dot-stuffing en DATA, QUIT limpio, timeouts.
 - **MIME**: plegado de cabeceras a 78 columnas, `=?UTF-8?B?…?=` para asuntos
-  con ñ/emoji, `Date` RFC 1123, Message-ID aleatorio, multipart/mixed con
-  adjuntos en base64 a 76 columnas.
+  con ñ/emoji (partidos en varias encoded-words de ≤75 caracteres, cortando en
+  frontera de carácter UTF-8), `Date` RFC 1123, Message-ID aleatorio,
+  multipart/mixed con adjuntos en base64 a 76 columnas. Las codificaciones
+  vienen de `net/mail` (el paquete `net`), que nació de las versiones a mano
+  de esta app.
 - **Sink**: acepta EHLO/MAIL/RCPT/DATA/RSET/QUIT, des-dot-stuffea, guarda
   cada mensaje como `.eml` con cabeceras `X-Sink-From/To`, y rechaza STARTTLS
   con un 454 honesto (servir TLS necesita certificado → v2 con `tls_accept`).
@@ -50,15 +53,18 @@ Anotados en `raylang/IDEAS.md` §71:
 
 1. **`tls_upgrade` funciona a la primera en su estreno** (positivo y citable):
    el envoltorio TLS in-place del handle contra Gmail real, sin sorpresas.
-2. Las **codificaciones de correo se escriben a mano** (RFC 2047, plegado,
-   dot-stuffing, base64 a 76 columnas): son exactamente las candidatas a
-   `std/` que el catálogo predijo — ninguna es difícil, todas son fáciles de
-   hacer sutilmente mal.
-3. `'\0'` no es expresable como literal de char (otra cara del hallazgo
-   `\x`/`\u` de §67): el NUL de AUTH PLAIN se construye con
-   `char_from_code(0)`.
+2. **[RESUELTO — `net/mail`, raylang M131]** Las codificaciones de correo se
+   escribían a mano (RFC 2047, plegado, dot-stuffing, base64 a 76 columnas).
+   raymail usa ahora `net/mail`; de paso se corrige un bug real de la versión
+   a mano: un asunto no-ASCII largo salía como UNA encoded-word de más de 75
+   caracteres (RFC 2047 §2) en una línea de más de 78.
+3. **[RESUELTO — raylang M118]** `'\0'` no era expresable como literal: el NUL
+   de AUTH PLAIN es ahora el escape `"\0"`.
 
 ## Desarrollo
+
+Requiere raylang 1.27+. La única dependencia es `net = "^0.3.5"` (registro de
+paquetes, fijada en `ray.lock`), por `net/mail`; `ray test` la descarga sola.
 
 ```sh
 ray test        # 6 tests

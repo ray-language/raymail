@@ -20,11 +20,10 @@ pub fn start(opts: SinkOpts) -> Result<int, string> {
     let listener = net.tcp_listen(opts.bind, opts.port)?;
     let actual = net.local_port(listener);
     spawn(fn() {
-        var running = true;
-        while (running) {
+        while (true) {
             match (net.tcp_accept(listener)) {
                 Result.Err(e) => {
-                    running = false;
+                    break;
                 },
                 Result.Ok(h) => {
                     spawn(fn() {
@@ -44,18 +43,14 @@ struct Rd {
 
 fn read_line(c: Rd) -> Result<string, string> {
     while (true) {
-        var i = 0;
-        while (i < c.buf.len()) {
-            if (c.buf[i] == 10) {
-                var stop = i;
-                if (stop > 0 && c.buf[stop - 1] == 13) {
-                    stop = stop - 1;
-                }
+        match (c.buf.index_of(b"\n")) {
+            Option.Some(i) => {
+                let stop = if (i > 0 && c.buf[i - 1] == 13) { i - 1 } else { i };
                 let line = c.buf.sub_bytes(0, stop);
                 c.buf = c.buf.sub_bytes(i + 1, c.buf.len());
                 return from_utf8(line);
-            }
-            i = i + 1;
+            },
+            Option.None => { },
         }
         let chunk = net.socket_read_bytes(c.h)?;
         if (chunk.len() == 0) {
@@ -76,11 +71,10 @@ fn serve_conn(h: int, dir: string) {
     say(c, "220 raymail sink ready");
     var from_addr = "";
     var rcpts: [string] = [];
-    var alive = true;
-    while (alive) {
+    while (true) {
         match (read_line(c)) {
             Result.Err(e) => {
-                alive = false;
+                break;
             },
             Result.Ok(line) => {
                 let up = line.to_upper();
@@ -96,16 +90,16 @@ fn serve_conn(h: int, dir: string) {
                 } else if (up == "DATA") {
                     say(c, "354 End data with <CR><LF>.<CR><LF>");
                     var body = "";
-                    var reading = true;
-                    while (reading) {
+                    var complete = false;
+                    while (true) {
                         match (read_line(c)) {
                             Result.Err(e) => {
-                                reading = false;
-                                alive = false;
+                                break;
                             },
                             Result.Ok(dline) => {
                                 if (dline == ".") {
-                                    reading = false;
+                                    complete = true;
+                                    break;
                                 } else {
                                     // Undo dot-stuffing.
                                     let clean = if (dline.starts_with("..")) {
@@ -118,33 +112,34 @@ fn serve_conn(h: int, dir: string) {
                             },
                         }
                     }
-                    if (alive) {
-                        let name = to_string(time.now())
-                            + "-"
-                            + hex.hex_encode(crypto.random_bytes(4))
-                            + ".eml";
-                        let meta = "X-Sink-From: "
-                            + from_addr
-                            + "\r\n"
-                            + "X-Sink-To: "
-                            + join(rcpts, ", ")
-                            + "\r\n";
-                        fs.write_file(dir + "/" + name, meta + body);
-                        eprint(
-                            "sink: stored "
-                                + name
-                                + " ("
-                                + to_string(body.len())
-                                + " B) from "
-                                + from_addr
-                        );
-                        say(c, "250 OK stored as " + name);
-                        from_addr = "";
-                        rcpts = [];
+                    if (!complete) {
+                        break;
                     }
+                    let name = to_string(time.now())
+                        + "-"
+                        + hex.hex_encode(crypto.random_bytes(4))
+                        + ".eml";
+                    let meta = "X-Sink-From: "
+                        + from_addr
+                        + "\r\n"
+                        + "X-Sink-To: "
+                        + join(rcpts, ", ")
+                        + "\r\n";
+                    fs.write_file(dir + "/" + name, meta + body);
+                    eprint(
+                        "sink: stored "
+                            + name
+                            + " ("
+                            + to_string(body.len())
+                            + " B) from "
+                            + from_addr
+                    );
+                    say(c, "250 OK stored as " + name);
+                    from_addr = "";
+                    rcpts = [];
                 } else if (up == "QUIT") {
                     say(c, "221 bye");
-                    alive = false;
+                    break;
                 } else if (up == "RSET") {
                     from_addr = "";
                     rcpts = [];

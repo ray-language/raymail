@@ -3,3 +3,4 @@ name = "raymail"
 version = "0.1.0"
 
 [dependencies]
+net = "^0.3.5"

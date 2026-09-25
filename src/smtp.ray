@@ -22,8 +22,7 @@ struct Conn {
 fn read_reply(c: Conn) -> Result<(int, string), string> {
     var text = "";
     var code = 0;
-    var more = true;
-    while (more) {
+    while (true) {
         let line = read_line(c)?;
         if (line.len() < 4) {
             return Result.Err("short SMTP reply: " + line);
@@ -36,26 +35,22 @@ fn read_reply(c: Conn) -> Result<(int, string), string> {
         };
         text = text + line.substring(4, line.len()) + "\n";
         if (line.substring(3, 4) != "-") {
-            more = false;
+            break;
         }
     }
-    return Result.Ok((code, text));
+    Result.Ok((code, text))
 }
 
 fn read_line(c: Conn) -> Result<string, string> {
     while (true) {
-        var i = 0;
-        while (i < c.buf.len()) {
-            if (c.buf[i] == 10) {
-                var stop = i;
-                if (stop > 0 && c.buf[stop - 1] == 13) {
-                    stop = stop - 1;
-                }
+        match (c.buf.index_of(b"\n")) {
+            Option.Some(i) => {
+                let stop = if (i > 0 && c.buf[i - 1] == 13) { i - 1 } else { i };
                 let line = c.buf.sub_bytes(0, stop);
                 c.buf = c.buf.sub_bytes(i + 1, c.buf.len());
                 return from_utf8(line);
-            }
-            i = i + 1;
+            },
+            Option.None => { },
         }
         let chunk = net.socket_read_bytes(c.h)?;
         if (chunk.len() == 0) {
@@ -103,9 +98,7 @@ pub fn send_mail(opts: SendOpts, m: mime.Mail) -> Result<string, string> {
     }
     if (opts.user != "") {
         if (caps.to_upper().contains("AUTH") && caps.to_upper().contains("PLAIN")) {
-            let token = base64.base64(
-                (to_string(char_nul()) + opts.user + to_string(char_nul()) + opts.password).to_bytes()
-            );
+            let token = base64.base64(("\0" + opts.user + "\0" + opts.password).to_bytes());
             command(c, "AUTH PLAIN " + token, 235)?;
         } else {
             command(c, "AUTH LOGIN", 334)?;
@@ -118,7 +111,7 @@ pub fn send_mail(opts: SendOpts, m: mime.Mail) -> Result<string, string> {
         command(c, "RCPT TO:<" + rcpt + ">", 250)?;
     }
     command(c, "DATA", 354)?;
-    let payload = mime.dot_stuff(mime.render(m)) + ".\r\n";
+    let payload = mime.smtp_data(m);
     net.socket_write_bytes(c.h, payload.to_bytes())?;
     let (code, text) = read_reply(c)?;
     if (code != 250) {
@@ -128,12 +121,4 @@ pub fn send_mail(opts: SendOpts, m: mime.Mail) -> Result<string, string> {
     command(c, "QUIT", 221);
     close(c.h);
     Result.Ok(text.trim())
-}
-
-// '\0' is not expressible as a char literal escape; build it by code point.
-fn char_nul() -> char {
-    match (char_from_code(0)) {
-        Option.Some(c) => c,
-        Option.None => ' ',
-    }
 }
