@@ -58,7 +58,6 @@ fn read_line(c: Conn) -> Result<string, string> {
         }
         c.buf = c.buf + chunk;
     }
-    Result.Err("unreachable")
 }
 
 fn command(c: Conn, line: string, want: int) -> Result<string, string> {

@@ -22,9 +22,7 @@ pub fn start(opts: SinkOpts) -> Result<int, string> {
     spawn(fn() {
         while (true) {
             match (net.tcp_accept(listener)) {
-                Result.Err(e) => {
-                    break;
-                },
+                Result.Err(_) => break,
                 Result.Ok(h) => {
                     spawn(fn() {
                         serve_conn(h, opts.dir);
@@ -58,7 +56,6 @@ fn read_line(c: Rd) -> Result<string, string> {
         }
         c.buf = c.buf + chunk;
     }
-    Result.Err("unreachable")
 }
 
 fn say(c: Rd, line: string) {
@@ -71,11 +68,9 @@ fn serve_conn(h: int, dir: string) {
     say(c, "220 raymail sink ready");
     var from_addr = "";
     var rcpts: [string] = [];
-    while (true) {
+    session: while (true) {
         match (read_line(c)) {
-            Result.Err(e) => {
-                break;
-            },
+            Result.Err(_) => break,
             Result.Ok(line) => {
                 let up = line.to_upper();
                 if (up.starts_with("EHLO") || up.starts_with("HELO")) {
@@ -90,15 +85,12 @@ fn serve_conn(h: int, dir: string) {
                 } else if (up == "DATA") {
                     say(c, "354 End data with <CR><LF>.<CR><LF>");
                     var body = "";
-                    var complete = false;
                     while (true) {
                         match (read_line(c)) {
-                            Result.Err(e) => {
-                                break;
-                            },
+                            // The client went away mid-DATA: nothing to store.
+                            Result.Err(_) => break session,
                             Result.Ok(dline) => {
                                 if (dline == ".") {
-                                    complete = true;
                                     break;
                                 } else {
                                     // Undo dot-stuffing.
@@ -111,9 +103,6 @@ fn serve_conn(h: int, dir: string) {
                                 }
                             },
                         }
-                    }
-                    if (!complete) {
-                        break;
                     }
                     let name = to_string(time.now())
                         + "-"

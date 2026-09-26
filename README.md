@@ -63,7 +63,7 @@ Anotados en `raylang/IDEAS.md` §71:
 
 ## Desarrollo
 
-Requiere raylang 1.27+. La única dependencia es `net = "^0.3.5"` (registro de
+Requiere raylang 1.27.13+. La única dependencia es `net = "^0.3.7"` (registro de
 paquetes, fijada en `ray.lock`), por `net/mail`; `ray test` la descarga sola.
 
 ```sh
