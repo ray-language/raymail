@@ -1,6 +1,7 @@
 // End-to-end: the client sends through the sink over real SMTP; the .eml
 // lands with the body, the attachment, and dot-stuffing undone.
 import std/fs;
+import std/net;
 import std/time;
 import mime;
 import smtp;
@@ -86,5 +87,32 @@ fn smtp_end_to_end_through_the_sink() {
         Result.Err(e) => assert(e.contains("STARTTLS")),
         Result.Ok(r) => panic("starttls against the sink must fail"),
     }
+    fs.remove_all(dir);
+}
+
+@test
+fn client_gone_mid_data_stores_nothing() {
+    let dir = match (fs.make_temp_dir("raymail_cut_")) {
+        Result.Ok(d) => d,
+        Result.Err(e) => panic(e),
+    };
+    let port = match (sink.start(sink.SinkOpts { dir: dir, bind: "127.0.0.1", port: 0 })) {
+        Result.Ok(p) => p,
+        Result.Err(e) => panic(e),
+    };
+    time.sleep(150);
+    let h = match (net.tcp_connect("127.0.0.1", port)) {
+        Result.Ok(h) => h,
+        Result.Err(e) => panic(e),
+    };
+    let script = "HELO t\r\nMAIL FROM:<a@example.com>\r\nRCPT TO:<b@example.com>\r\nDATA\r\nhalf a body\r\n";
+    match (net.socket_write_bytes(h, script.to_bytes())) {
+        Result.Ok(_) => { },
+        Result.Err(e) => panic(e),
+    }
+    time.sleep(150);
+    close(h);
+    time.sleep(200);
+    assert_eq(inbox(dir).len(), 0);
     fs.remove_all(dir);
 }
