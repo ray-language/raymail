@@ -25,6 +25,18 @@ fn boundary() -> string {
     "raymail-" + hex.hex_encode(crypto.random_bytes(12))
 }
 
+/// Whether an envelope address is safe to put on an SMTP command line or in a
+/// header: no control characters (a CR or LF would end the line early) and
+/// no angle brackets.
+pub fn plain_address(addr: string) -> bool {
+    for c in addr.to_bytes() {
+        if (c < 32 || c == 127 || c == 60 || c == 62) {
+            return false;
+        }
+    }
+    true
+}
+
 pub fn message_id(domain: string) -> string {
     "<" + hex.hex_encode(crypto.random_bytes(8)) + "@" + domain + ">"
 }

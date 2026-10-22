@@ -24,7 +24,10 @@ de la sesión TLS. El upgrade in-place del handle funciona.
 
 - **SMTP cliente**: respuestas multilínea (`250-…`), STARTTLS opcional (falla
   honesto si el servidor no lo anuncia), AUTH PLAIN (o LOGIN como fallback),
-  dot-stuffing en DATA, QUIT limpio, timeouts.
+  dot-stuffing en DATA, QUIT limpio, timeouts. La contraseña solo viaja tras
+  STARTTLS: `--user` sin `--starttls` es un error, salvo con `--insecure-auth`
+  (un relay local de confianza). Las direcciones con caracteres de control se
+  rechazan antes de conectar.
 - **MIME**: plegado de cabeceras a 78 columnas, `=?UTF-8?B?…?=` para asuntos
   con ñ/emoji (partidos en varias encoded-words de ≤75 caracteres, cortando en
   frontera de carácter UTF-8), `Date` RFC 1123, Message-ID aleatorio,
@@ -32,7 +35,8 @@ de la sesión TLS. El upgrade in-place del handle funciona.
   vienen de `net/mail` (el paquete `net`), que nació de las versiones a mano
   de esta app.
 - **Sink**: acepta EHLO/MAIL/RCPT/DATA/RSET/QUIT, des-dot-stuffea, guarda
-  cada mensaje como `.eml` con cabeceras `X-Sink-From/To`, y rechaza STARTTLS
+  cada mensaje como `.eml` con cabeceras `X-Sink-From/To` (una dirección con
+  caracteres de control recibe un 501 y no llega a ellas), y rechaza STARTTLS
   con un 454 honesto (servir TLS necesita certificado → v2 con `tls_accept`).
 
 ## Estado actual

@@ -8,6 +8,9 @@ pub struct SendOpts {
     host: string,
     port: int,
     starttls: bool,
+    // Allows AUTH on a connection without TLS (a trusted local relay); off,
+    // a password is only ever sent after STARTTLS.
+    insecure_auth: bool,
     user: string,
     password: string,
     timeout_ms: int,
@@ -74,6 +77,16 @@ fn ehlo(c: Conn) -> Result<string, string> {
 }
 
 pub fn send_mail(opts: SendOpts, m: mime.Mail) -> Result<string, string> {
+    if (opts.user != "" && !opts.starttls && !opts.insecure_auth) {
+        return Result.Err(
+            "refusing to send the password without TLS: add --starttls (or --insecure-auth for a trusted local relay)"
+        );
+    }
+    for a in [m.from_addr] + m.to_addrs {
+        if (!mime.plain_address(a)) {
+            return Result.Err("invalid address: " + a.replace("\r", "\\r").replace("\n", "\\n"));
+        }
+    }
     let sock = net.tcp_connect(opts.host, opts.port)?;
     net.set_read_timeout(sock, opts.timeout_ms);
     var c = Conn { h: sock, buf: b"" };
