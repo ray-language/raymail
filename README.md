@@ -36,7 +36,8 @@ de la sesión TLS. El upgrade in-place del handle funciona.
   de esta app.
 - **Sink**: acepta EHLO/MAIL/RCPT/DATA/RSET/QUIT, des-dot-stuffea, guarda
   cada mensaje como `.eml` con cabeceras `X-Sink-From/To` (una dirección con
-  caracteres de control recibe un 501 y no llega a ellas), y rechaza STARTTLS
+  caracteres de control recibe un 501 y no llega a ellas; solo `CRLF.CRLF` termina el DATA, así
+  que un `\n.\n` no parte el mensaje), y rechaza STARTTLS
   con un 454 honesto (servir TLS necesita certificado → v2 con `tls_accept`).
 
 ## Estado actual
