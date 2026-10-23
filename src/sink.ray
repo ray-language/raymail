@@ -58,6 +58,16 @@ fn read_line(c: Rd) -> Result<string, string> {
     }
 }
 
+// "<addr>" (or "<>") with no control characters inside.
+fn envelope_ok(addr: string) -> bool {
+    for c in addr.to_bytes() {
+        if (c < 32 || c == 127) {
+            return false;
+        }
+    }
+    true
+}
+
 fn say(c: Rd, line: string) {
     net.socket_write_bytes(c.h, (line + "\r\n").to_bytes());
 }
@@ -77,11 +87,23 @@ fn serve_conn(h: int, dir: string) {
                     say(c, "250-raymail-sink");
                     say(c, "250 8BITMIME");
                 } else if (up.starts_with("MAIL FROM:")) {
-                    from_addr = line.substring(10, line.len()).trim();
-                    say(c, "250 OK");
+                    // The addresses end up in X-Sink-From/X-Sink-To: a bare CR in
+                    // them would start a new header line in the stored message.
+                    let addr = line.substring(10, line.len()).trim();
+                    if (envelope_ok(addr)) {
+                        from_addr = addr;
+                        say(c, "250 OK");
+                    } else {
+                        say(c, "501 5.1.7 bad sender address");
+                    }
                 } else if (up.starts_with("RCPT TO:")) {
-                    rcpts.push(line.substring(8, line.len()).trim());
-                    say(c, "250 OK");
+                    let addr = line.substring(8, line.len()).trim();
+                    if (envelope_ok(addr)) {
+                        rcpts.push(addr);
+                        say(c, "250 OK");
+                    } else {
+                        say(c, "501 5.1.3 bad recipient address");
+                    }
                 } else if (up == "DATA") {
                     say(c, "354 End data with <CR><LF>.<CR><LF>");
                     var body = "";

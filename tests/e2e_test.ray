@@ -37,6 +37,7 @@ fn smtp_end_to_end_through_the_sink() {
         host: "127.0.0.1",
         port: port,
         starttls: false,
+        insecure_auth: false,
         user: "",
         password: "",
         timeout_ms: 5000
@@ -79,6 +80,7 @@ fn smtp_end_to_end_through_the_sink() {
         host: "127.0.0.1",
         port: port,
         starttls: true,
+        insecure_auth: false,
         user: "",
         password: "",
         timeout_ms: 5000
@@ -115,4 +117,53 @@ fn client_gone_mid_data_stores_nothing() {
     time.sleep(200);
     assert_eq(inbox(dir).len(), 0);
     fs.remove_all(dir);
+}
+
+@test
+fn the_password_is_not_sent_without_tls() {
+    let m = mime.Mail {
+        from_addr: "ana@example.com",
+        to_addrs: ["luis@example.com"],
+        subject: "s",
+        body: "b",
+        attachments: []
+    };
+    // Refused before connecting: nothing listens on this port.
+    let opts = smtp.SendOpts {
+        host: "127.0.0.1",
+        port: 1,
+        starttls: false,
+        insecure_auth: false,
+        user: "ana",
+        password: "secret",
+        timeout_ms: 1000
+    };
+    match (smtp.send_mail(opts, m)) {
+        Result.Err(e) => assert(e.contains("without TLS")),
+        Result.Ok(r) => panic("sent a password without TLS"),
+    }
+}
+
+@test
+fn addresses_with_control_characters_are_refused() {
+    let m = mime.Mail {
+        from_addr: "ana@example.com\rX-Extra: 1",
+        to_addrs: ["luis@example.com"],
+        subject: "s",
+        body: "b",
+        attachments: []
+    };
+    let opts = smtp.SendOpts {
+        host: "127.0.0.1",
+        port: 1,
+        starttls: false,
+        insecure_auth: false,
+        user: "",
+        password: "",
+        timeout_ms: 1000
+    };
+    match (smtp.send_mail(opts, m)) {
+        Result.Err(e) => assert(e.contains("invalid address")),
+        Result.Ok(r) => panic("sent an address with a CR"),
+    }
 }

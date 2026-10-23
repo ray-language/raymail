@@ -8,7 +8,7 @@ fn usage() {
     eprint("usage:");
     eprint("  raymail send --to A[,B...] --from ADDR --subject S (--body TEXT | --body-file F)");
     eprint("               [--attach FILE]... [--host H] [--port N] [--starttls]");
-    eprint("               [--user U --password P] [--timeout MS]");
+    eprint("               [--user U --password P [--insecure-auth]] [--timeout MS]");
     eprint("  raymail sink [--dir DIR] [--bind H] [--port N]     (dev SMTP server -> .eml files)");
     eprint("");
     eprint("  defaults: host 127.0.0.1, port 2525 (sink too); sink dir ./raymail-inbox");
@@ -119,6 +119,7 @@ fn main() -> int {
             host: flag_str(av, "--host", "127.0.0.1"),
             port: flag_int(av, "--port", 2525),
             starttls: has_flag(av, "--starttls"),
+            insecure_auth: has_flag(av, "--insecure-auth"),
             user: flag_str(av, "--user", ""),
             password: flag_str(av, "--password", ""),
             timeout_ms: flag_int(av, "--timeout", 30000)
